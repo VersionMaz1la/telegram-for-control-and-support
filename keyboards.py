@@ -90,7 +90,7 @@ def skip_prep_keyboard():
             [
                 InlineKeyboardButton(
                     text="⏭ Закончить подготовку раньше",
-                    callback_data="skip_prep"
+                    callback_data="confirm_skip_prep"
                 )
             ],
             [
@@ -235,12 +235,19 @@ def start_big_break_keyboard():
     )
 
 def skip_short_break_keyboard():
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text="⏳ Сколько осталось времени?",
+                    callback_data="remaining_time"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="⏭ Закончить короткий перерыв раньше",
-                    callback_data="skip_short_break"
+                    callback_data="confirm_skip_short_break"
                 )
             ]
         ]
@@ -288,6 +295,25 @@ def confirm_big_break_keyboard():
                 InlineKeyboardButton(
                     text="❌ Нет",
                     callback_data="cancel_big_break"
+                )
+            ]
+        ]
+    )
+
+def yes_no_short_break_keyboard():
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да",
+                    callback_data="confirm_short_break"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Нет",
+                    callback_data="cancel_short_break"
                 )
             ]
         ]

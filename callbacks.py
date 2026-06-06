@@ -32,3 +32,4 @@ REASON_DISTRACTED = "reason_distracted"
 REASON_OTHER = "reason_other"
 
 SKIP_CATCHUP_REST = "skip_catchup_rest"
+callback_data="confirm_skip_prep"
