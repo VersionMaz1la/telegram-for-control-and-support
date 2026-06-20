@@ -66,6 +66,13 @@ async def remove_keyboard(message):
     except:
         pass
 
+async def delete_message(message):
+
+    try:
+        await message.delete()
+    except:
+        pass
+
 # состояние
 
 prep_skipped = False
@@ -80,6 +87,7 @@ remaining_prep_time = 0
 prep_message = None
 remaining_break_time = 0
 remaining_catchup_time = 0
+remaining_catchup_rest_time = 0
 
 break_skipped = False
 
@@ -107,10 +115,9 @@ day_pause = False
 async def preparation_flow():
 
     global prep_skipped
-
     global day_ended
-
     global remaining_prep_time
+    global prep_message
 
     remaining_prep_time = PREP_END
 
@@ -136,12 +143,14 @@ async def preparation_flow():
         ):
             warning_sent = True
 
-            await bot.send_message(
+            await remove_keyboard(prep_message)
+
+            prep_message = await bot.send_message(
                 chat_id=CHAT_ID,
                 message_thread_id=THREAD_ID,
-                text=PREPARATION_WARNING_TEXT
+                text=PREPARATION_WARNING_TEXT,
+                reply_markup=skip_prep_keyboard()
             )
-
     await remove_keyboard(
         prep_message
     )
@@ -159,7 +168,11 @@ async def start_work_block():
 
     current_stage = STAGE_WORK_FIRST_HALF
 
-    block_duration = LONG_WORK_BLOCK if current_block <= 2 else SHORT_WORK_BLOCK
+    block_duration = (
+        LONG_WORK_BLOCK // 2
+        if current_block <= 2
+        else SHORT_WORK_BLOCK // 2
+    )
 
     if current_block == 1:
 
@@ -173,22 +186,16 @@ async def start_work_block():
 
         block_text = WORK_BLOCK_4_TEXT
 
-    await bot.send_message(
+    action_message = await bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=THREAD_ID,
         text=(
             f"Ты уже должен заниматься.\n\n"
-            f"Начинается рабочий блок №{current_block}.\n\n"
-            f"Длительность блока: "
+            f"Начинается первая половина рабочего блока №{current_block}.\n\n"
+            f"Длительность этапа: "
             f"{format_minutes(block_duration)}.\n\n"
             f"{block_text}"
-        )
-    )
-
-    action_message = await bot.send_message(
-        chat_id=CHAT_ID,
-        message_thread_id=THREAD_ID,
-        text="Доступные действия:",
+        ),
         reply_markup=(
             work_keyboard_with_big_break()
             if current_block < 4
@@ -197,7 +204,12 @@ async def start_work_block():
     )
     global remaining_work_time
 
-    remaining = LONG_WORK_BLOCK if current_block <= 2 else SHORT_WORK_BLOCK
+    remaining = (
+        LONG_WORK_BLOCK // 2
+        if current_block <= 2
+        else SHORT_WORK_BLOCK // 2
+    )
+
 
     remaining_work_time = remaining
     step = 1  # шаг 1 секунда для теста
@@ -281,13 +293,18 @@ async def resume_work_block():
 
         return
 
-    await bot.send_message(
+    action_message = await bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=THREAD_ID,
         text=(
             f"Возвращаемся к работе.\n\n"
             f"Осталось работать: "
             f"{format_minutes(remaining_work_time)}."
+        ),
+        reply_markup=(
+            work_keyboard_with_big_break()
+            if current_block < 4
+            else work_keyboard()
         )
     )
 
@@ -297,6 +314,10 @@ async def resume_work_block():
             return
 
         remaining_work_time -= 1
+
+    await remove_keyboard(
+        action_message
+    )
 
     if short_break_return_stage == STAGE_WORK_FIRST_HALF:
 
@@ -334,9 +355,13 @@ async def second_half_work_block():
 
     short_break_used = False
 
-    block_duration = LONG_WORK_BLOCK if current_block <= 2 else SHORT_WORK_BLOCK
+    block_duration = (
+        LONG_WORK_BLOCK // 2
+        if current_block <= 2
+        else SHORT_WORK_BLOCK // 2
+    )
 
-    await bot.send_message(
+    action_message = await bot.send_message(
         chat_id=CHAT_ID,
         message_thread_id=THREAD_ID,
         text=(
@@ -344,13 +369,7 @@ async def second_half_work_block():
             f"Осталось работать: "
             f"{format_minutes(block_duration)}.\n\n"
             f"{SECOND_HALF_WORK_TEXT}"
-        )
-    )
-
-    action_message = await bot.send_message(
-        chat_id=CHAT_ID,
-        message_thread_id=THREAD_ID,
-        text="Доступные действия:",
+        ),
         reply_markup=(
             work_keyboard_with_big_break()
             if current_block < 4
@@ -363,7 +382,11 @@ async def second_half_work_block():
 
     break_taken = False
 
-    remaining = LONG_WORK_BLOCK if current_block <= 2 else SHORT_WORK_BLOCK
+    remaining = (
+        LONG_WORK_BLOCK // 2
+        if current_block <= 2
+        else SHORT_WORK_BLOCK // 2
+    )
 
     remaining_work_time = remaining
 
@@ -417,6 +440,8 @@ async def start_big_break():
     current_stage = STAGE_BIG_BREAK
 
     remaining_break_time = BREAK_END
+
+    warning_message = None
 
     break_message = await bot.send_message(
         chat_id=CHAT_ID,
@@ -499,9 +524,10 @@ async def start_big_break():
                 )
             )
 
-    await remove_keyboard(
-        warning_message
-    )
+    if warning_message:
+        await remove_keyboard(
+            warning_message
+        )
 
     await bot.send_message(
         chat_id=CHAT_ID,
@@ -550,7 +576,7 @@ async def start_day(callback: CallbackQuery):
                 [
                     InlineKeyboardButton(
                         text="⏭ Закончить подготовку раньше",
-                        callback_data="skip_prep"
+                        callback_data="confirm_skip_prep"
                     )
                 ],
                 [
@@ -567,16 +593,49 @@ async def start_day(callback: CallbackQuery):
 
     await callback.answer()
 
+@dp.callback_query(F.data == "confirm_skip_prep")
+async def confirm_skip_prep(callback: CallbackQuery):
+
+    global day_pause
+
+    day_pause = True
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "Ты уверен, что хочешь закончить подготовку раньше?",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Да",
+                        callback_data="skip_prep"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ Нет",
+                        callback_data="cancel_skip_prep"
+                    )
+                ]
+            ]
+        )
+    )
+
+    await callback.answer()
 
 @dp.callback_query(F.data == "skip_prep")
 async def skip_prep(callback: CallbackQuery):
 
     global prep_skipped
+    global day_pause
+
+    day_pause = False
     prep_skipped = True
 
-    await callback.message.edit_reply_markup(
-        reply_markup=None
-    )
+    await delete_message(callback.message)
 
     await callback.message.answer(
         PREP_SKIP_TEXT
@@ -586,17 +645,31 @@ async def skip_prep(callback: CallbackQuery):
 
     await callback.answer()
 
+@dp.callback_query(F.data == "cancel_skip_prep")
+async def cancel_skip_prep(callback: CallbackQuery):
+
+    global day_pause
+
+    day_pause = False
+
+    await delete_message(callback.message)
+
+    await callback.message.answer(
+        "Продолжаем подготовку.",
+        reply_markup=skip_prep_keyboard()
+    )
+
+    await callback.answer()
 
 @dp.callback_query(F.data == "yes")
 async def answer_yes(callback: CallbackQuery):
 
     global current_stage
+    global current_block
 
     if current_stage == STAGE_CATCHUP:
 
-        await callback.message.edit_text(
-            "Выбрано: ✅ Да"
-        )
+        await delete_message(callback.message)
 
         await callback.message.answer(
             random.choice(MOTIVATION_MESSAGES)
@@ -612,19 +685,19 @@ async def answer_yes(callback: CallbackQuery):
         return
 
     if current_stage == STAGE_CATCHUP_FINISH:
+        current_stage = None
+        current_block = 1
 
-        await callback.message.edit_text(
-            "Выбрано: ✅ Да"
-        )
+        await delete_message(callback.message)
 
         await callback.message.answer(
             "Хорош, чел.\n\n"
 
-            "Сегодня ты действительно постарался.\n\n"
+            "Сегодня ты действительно постарался.\n"
 
             "Ты сделал всё, что было необходимо, и можешь быть доволен собой.\n\n"
 
-            "Теперь тебя ждёт заслуженный отдых.\n\n"
+            "Теперь тебя ждёт заслуженный отдых.\n"
 
             "Помни: всё, что делает нас сильнее через трудности, остаётся с нами навсегда.\n\n"
 
@@ -632,13 +705,15 @@ async def answer_yes(callback: CallbackQuery):
 
             "Спокойной ночи. Хорошо выспись и наберись сил перед новым днём."
         )
+        await callback.message.answer(
+            "🕵️ Система находится в режиме ожидания.\n\n"
+            "Ждём вашего пробуждения и кодового слова для начала дня."
+        )
 
         await callback.answer()
         return
 
-    await callback.message.edit_text(
-        "Выбрано: ✅ Да"
-    )
+    await delete_message(callback.message)
 
     await callback.message.answer(
         random.choice(MOTIVATION_MESSAGES),
@@ -654,12 +729,11 @@ async def answer_yes(callback: CallbackQuery):
 async def answer_no(callback: CallbackQuery):
 
     global current_stage
+    global current_block
 
     if current_stage == STAGE_CATCHUP:
 
-        await callback.message.edit_text(
-            "Выбрано: ❌ Нет"
-        )
+        await delete_message(callback.message)
 
         await callback.message.answer(
             "Подумай, из-за чего это произошло.",
@@ -670,10 +744,9 @@ async def answer_no(callback: CallbackQuery):
         return
 
     if current_stage == STAGE_CATCHUP_FINISH:
-
-        await callback.message.edit_text(
-            "Выбрано: ❌ Нет"
-        )
+        current_stage = None
+        current_block = 1
+        await delete_message(callback.message)
 
         await callback.message.answer(
             "Сегодня времени уже не осталось.\n\n"
@@ -681,18 +754,20 @@ async def answer_no(callback: CallbackQuery):
             "Завтра нужно выложиться сильнее."
         )
 
+        await callback.message.answer(
+            "🕵️ Система находится в режиме ожидания.\n\n"
+            "Ждём вашего пробуждения и кодового слова для начала дня."
+        )
+
         await callback.answer()
         return
 
-    await callback.message.edit_text(
-        "Выбрано: ❌ Нет"
-    )
+    await delete_message(callback.message)
 
     await callback.message.answer(
-        "Из-за чего это произошло?",
+        "Причина:",
         reply_markup=no_reason_keyboard()
     )
-
     current_stage = STAGE_WORK_SECOND_HALF
 
     await callback.answer()
@@ -716,12 +791,51 @@ async def skip_break(callback: CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(F.data == "short_break")
+async def short_break_question(callback: CallbackQuery):
+
+    global day_pause
+
+    day_pause = True
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "Ты уверен, что хочешь начать короткий перерыв?",
+        reply_markup=yes_no_short_break_keyboard()
+    )
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_short_break")
+async def cancel_short_break(callback: CallbackQuery):
+
+    global day_pause
+
+    day_pause = False
+
+    await delete_message(callback.message)
+
+    await callback.message.answer(
+        "Продолжаем работу.",
+        reply_markup=(
+            work_keyboard_with_big_break()
+            if current_block < 4
+            else work_keyboard()
+        )
+    )
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "confirm_short_break")
 async def short_break_handler(callback: CallbackQuery):
     global break_taken
     global current_stage
     global short_break_skipped
     global short_break_used
     global short_break_return_stage
+    global day_pause
 
     if current_stage not in (
             STAGE_WORK_FIRST_HALF,
@@ -744,8 +858,10 @@ async def short_break_handler(callback: CallbackQuery):
             show_alert=True
         )
 
+        day_pause = False
         return
 
+    day_pause = False
     short_break_used = True
 
     short_break_skipped = False
@@ -753,13 +869,13 @@ async def short_break_handler(callback: CallbackQuery):
     current_stage = STAGE_SHORT_BREAK
     break_taken = True
 
-    await callback.message.edit_reply_markup(reply_markup=None)
+    await delete_message(callback.message)
     short_break_message = await callback.message.answer(
         "Начался короткий перерыв на 15 минут.",
         reply_markup=skip_short_break_keyboard()
     )
 
-    await asyncio.sleep(10)  # предупреждение за 5 секунд
+    await asyncio.sleep(SHORT_BREAK_WARNING_TIME)  # предупреждение за 5 секунд
 
     if short_break_skipped:
         return
@@ -769,7 +885,7 @@ async def short_break_handler(callback: CallbackQuery):
     )
 
     await callback.message.answer("Короткий перерыв подходит к концу.")
-    await asyncio.sleep(5)
+    await asyncio.sleep(SHORT_BREAK_END_TIME)
 
     if short_break_skipped:
         return
@@ -844,6 +960,11 @@ async def confirm_end_day(callback: CallbackQuery):
         CONFIRM_END_DAY_TEXT
     )
 
+    await callback.message.answer(
+        "🕵️ Система находится в режиме ожидания.\n\n"
+        "Ждём вашего пробуждения и кодового слова для начала дня."
+    )
+
     await callback.answer()
 
 @dp.callback_query(F.data == "cancel_end_day")
@@ -854,29 +975,167 @@ async def cancel_end_day(callback: CallbackQuery):
     global day_pause
 
     current_stage = end_day_return_stage
-
     day_pause = False
 
-    await callback.message.edit_reply_markup(
-        reply_markup=None
-    )
+    await delete_message(callback.message)
 
-    await callback.message.answer(
-        CANCEL_END_DAY_TEXT
-    )
+    if current_stage == STAGE_PREPARATION:
+
+        await callback.message.answer(
+            CANCEL_END_DAY_TEXT,
+            reply_markup=skip_prep_keyboard()
+        )
+
+    elif current_stage in (
+            STAGE_WORK_FIRST_HALF,
+            STAGE_WORK_SECOND_HALF
+    ):
+
+        await callback.message.answer(
+            CANCEL_END_DAY_TEXT,
+            reply_markup=(
+                work_keyboard_with_big_break()
+                if current_block < 4
+                else work_keyboard()
+            )
+        )
+
+    elif current_stage == STAGE_BIG_BREAK:
+
+        await callback.message.answer(
+            CANCEL_END_DAY_TEXT,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⏳ Сколько осталось времени?",
+                            callback_data="remaining_time"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⏭ Закончить перерыв раньше",
+                            callback_data="skip_break"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🛑 Завершить день",
+                            callback_data="end_day"
+                        )
+                    ]
+                ]
+            )
+        )
+
+    elif current_stage == STAGE_SHORT_BREAK:
+
+        await callback.message.answer(
+            CANCEL_END_DAY_TEXT,
+            reply_markup=skip_short_break_keyboard()
+        )
+
+
+    elif current_stage in (
+
+            STAGE_CATCHUP,
+
+            STAGE_CATCHUP_SECOND_HALF
+
+    ):
+
+        await callback.message.answer(
+
+            CANCEL_END_DAY_TEXT,
+
+            reply_markup=work_keyboard()
+
+        )
+
+    elif current_stage == STAGE_CATCHUP_FINISH:
+
+        await callback.message.answer(
+            (
+                "Финальный вопрос.\n\n"
+                "Удалось ли тебе наверстать недостающее время?\n\n"
+                "Можешь ли ты честно сказать, что сегодня сделал всё возможное?"
+            ),
+            reply_markup=yes_no_keyboard()
+        )
+
+
+    elif current_stage == STAGE_CATCHUP_REST:
+
+        await callback.message.answer(
+
+            CANCEL_END_DAY_TEXT,
+
+            reply_markup=InlineKeyboardMarkup(
+
+                inline_keyboard=[
+
+                    [
+
+                        InlineKeyboardButton(
+
+                            text="⏳ Сколько осталось до следующего блока?",
+
+                            callback_data="remaining_time"
+
+                        )
+
+                    ],
+
+                    [
+
+                        InlineKeyboardButton(
+
+                            text="⏭ Закончить отдых раньше",
+
+                            callback_data="skip_catchup_rest"
+
+                        )
+
+                    ],
+
+                    [
+
+                        InlineKeyboardButton(
+
+                            text="🛑 Завершить день",
+
+                            callback_data="end_day"
+
+                        )
+
+                    ]
+
+                ]
+
+            )
+
+        )
+
+
+    else:
+
+        await callback.message.answer(
+
+            CANCEL_END_DAY_TEXT
+
+        )
 
     await callback.answer()
 
 @dp.callback_query(F.data == "reason_tired")
 async def reason_tired(callback: CallbackQuery):
+    global current_stage
 
-    await callback.message.edit_reply_markup(
-        reply_markup=None
-    )
+    await delete_message(callback.message)
 
     await callback.message.answer(
-        "Выбрана причина: Устал\n\n"
-        "Подумай, из-за чего это произошло и запиши это в дневник.",
+        f"Выбрана причина: Устал\n\n"
+        f"{REASON_REFLECTION_TEXT}",
         reply_markup=continue_keyboard()
     )
 
@@ -885,14 +1144,12 @@ async def reason_tired(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "reason_distracted")
 async def reason_distracted(callback: CallbackQuery):
+    global current_stage
 
-    await callback.message.edit_reply_markup(
-        reply_markup=None
-    )
-
+    await delete_message(callback.message)
     await callback.message.answer(
-        "Выбрана причина: Отвлекался\n\n"
-        "Подумай, из-за чего это произошло и запиши это в дневник.",
+        f"Выбрана причина: Отвлекался\n\n"
+        f"{REASON_REFLECTION_TEXT}",
         reply_markup=continue_keyboard()
     )
 
@@ -930,32 +1187,22 @@ async def continue_handler(callback: CallbackQuery):
 
     # Если сейчас короткий перерыв, возвращаемся в рабочий блок
     if current_stage == STAGE_SHORT_BREAK:
-
-        current_stage = STAGE_WORK_SECOND_HALF if current_stage == STAGE_SHORT_BREAK else current_stage
-
         await resume_work_block()
+
         await callback.answer()
         return
 
     # Если мы в конце второй половины блока — запускаем start_big_break() или вопрос после блока 4
     if current_stage == STAGE_WORK_SECOND_HALF:
-
-        await callback.message.answer(
-            (
-                f"Отлично.\n\n"
-                f"Продолжаем рабочий блок №{current_block}.\n\n"
-                f"Не сбавляй темп.\n\n"
-                f"Ты уже движешься вперёд и становишься лучше, чем был вчера."
-            )
-        )
-
         asyncio.create_task(
             second_half_work_block()
         )
+
         await callback.answer()
         return
 
     if current_stage == STAGE_CATCHUP:
+        current_stage = STAGE_CATCHUP_SECOND_HALF
 
         asyncio.create_task(
             catchup_second_half()
@@ -1040,6 +1287,20 @@ async def cancel_day_pause(callback: CallbackQuery):
 @dp.callback_query(F.data == "start_big_break_early")
 async def start_big_break_early(callback: CallbackQuery):
 
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "Ты уверен, что хочешь завершить текущий рабочий блок и перейти к большому перерыву?",
+        reply_markup=confirm_big_break_keyboard()
+    )
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "confirm_big_break")
+async def confirm_big_break(callback: CallbackQuery):
+
     global break_taken
 
     break_taken = True
@@ -1055,6 +1316,24 @@ async def start_big_break_early(callback: CallbackQuery):
 
     asyncio.create_task(
         start_big_break()
+    )
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_big_break")
+async def cancel_big_break(callback: CallbackQuery):
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
+    await callback.message.answer(
+        "Действия:",
+        reply_markup=(
+            work_keyboard_with_big_break()
+            if current_block < 4
+            else work_keyboard()
+        )
     )
 
     await callback.answer()
@@ -1085,6 +1364,16 @@ async def remaining_time(callback: CallbackQuery):
     global remaining_break_time
     global remaining_prep_time
     global remaining_catchup_time
+    global remaining_catchup_rest_time
+
+    if current_stage == STAGE_CATCHUP_REST:
+        await callback.answer(
+            f"До начала дополнительного блока осталось:\n"
+            f"{format_minutes(remaining_catchup_rest_time)}",
+            show_alert=True
+        )
+
+        return
 
     if current_stage in (
             STAGE_WORK_FIRST_HALF,
@@ -1104,6 +1393,14 @@ async def remaining_time(callback: CallbackQuery):
         await callback.answer(
             f"До конца большого перерыва осталось:\n"
             f"{format_minutes(remaining_break_time)}",
+            show_alert=True
+        )
+
+        return
+
+    if current_stage == STAGE_SHORT_BREAK:
+        await callback.answer(
+            "Сейчас идёт короткий перерыв.",
             show_alert=True
         )
 
@@ -1137,8 +1434,86 @@ async def remaining_time(callback: CallbackQuery):
         show_alert=True
     )
 
+@dp.callback_query(F.data == "confirm_skip_short_break")
+async def confirm_skip_short_break(callback: CallbackQuery):
+
+    await callback.message.answer(
+        "Ты уверен, что хочешь закончить короткий перерыв раньше?",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Да",
+                        callback_data="skip_short_break"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ Нет",
+                        callback_data="cancel_skip_short_break"
+                    )
+                ]
+            ]
+        )
+    )
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_skip_short_break")
+async def cancel_skip_short_break(callback: CallbackQuery):
+
+    await callback.message.edit_reply_markup(
+        reply_markup=skip_short_break_keyboard()
+    )
+
+    await callback.answer(
+        "Продолжаем отдыхать."
+    )
+
 @dp.message()
 async def process_custom_reason(message: Message):
+    if message.message_thread_id != THREAD_ID:
+        return
+    print("MESSAGE RECEIVED:", message.text)
+    if (
+            current_stage is None
+            and message.text
+    ):
+
+        if message.text and message.text.strip().lower() in (
+                "я готов",
+                "я готов!"
+        ):
+
+            global day_ended
+            global current_block
+
+            day_ended = False
+
+            current_block = (
+                TEST_START_BLOCK
+                if TEST_MODE
+                else REAL_START_BLOCK
+            )
+
+            await message.answer(
+                (
+                    "Привет, будущий ML-инженер.\n\n"
+                    "Сейчас начинается твой день. Надеюсь, ты хорошо выспался и готов к продуктивной работе.\n\n"
+                    "Сегодня тебя ждёт много задач, но помни: каждая минута вложенного времени приближает тебя к той жизни, которую ты хочешь построить для себя и своих близких.\n\n"
+                    "Настраивайся на качественную работу, не бойся трудностей и двигайся вперёд. Всё получится."
+                ),
+                reply_markup=start_day_keyboard()
+            )
+
+        else:
+
+            await message.answer(
+                "Неверное кодовое слово."
+            )
+
+        return
+
     print("PROCESS_CUSTOM_REASON")
 
     global waiting_for_custom_reason
@@ -1153,14 +1528,14 @@ async def process_custom_reason(message: Message):
     await message.answer(
         f"Выбрана причина:\n\n"
         f"{message.text}\n\n"
-        f"Подумай, из-за чего это произошло и запиши это в дневник.",
+        f"{REASON_REFLECTION_TEXT}",
         reply_markup=continue_keyboard()
     )
     return
 
-@dp.message()
 async def process_study_time(message: Message):
-
+    if message.message_thread_id != THREAD_ID:
+        return
     print("PROCESS_STUDY_TIME")
 
     global current_stage
@@ -1201,24 +1576,30 @@ async def process_study_time(message: Message):
             "Используй формат:\n"
             "07:00\n"
             "05:30\n\n"
-            "Максимум: 15:00"
+            "Максимум: 12:00"
         )
 
         return
     total_minutes = hours * 60 + minutes
 
-    target_minutes = 7 * 60
+    target_minutes = TARGET_STUDY_HOURS * 60
 
     if total_minutes >= target_minutes:
 
-         await message.answer(
+        current_stage = None
+        current_block = 1
+
+        await message.answer(
             "Ты большой молодец.\n\n"
             "Теперь отдохни.\n\n"
             "Загляни в дневник и запиши свои мысли.",
             reply_markup=skip_catchup_rest_keyboard()
         )
 
-
+        await callback.message.answer(
+            "🕵️ Система находится в режиме ожидания.\n\n"
+            "Ждём вашего пробуждения и кодового слова для начала дня."
+        )
     else:
 
         remaining_minutes = target_minutes - total_minutes
@@ -1240,7 +1621,10 @@ async def process_study_time(message: Message):
 
         # Задаём тестовое время отдыха (для проверки MVP)
 
-        rest_seconds = 5  # тут можно поставить любое количество секунд
+        rest_seconds = CATCHUP_REST_TIME
+
+        remaining_catchup_rest_time = rest_seconds
+        current_stage = STAGE_CATCHUP_REST
 
         rest_message = await message.answer(
 
@@ -1296,6 +1680,7 @@ async def catchup_break(
 ):
     global catchup_rest_skipped
     global remaining_catchup_time
+    global remaining_catchup_rest_time
 
     catchup_rest_skipped = False
 
@@ -1318,17 +1703,12 @@ async def catchup_break(
         await asyncio.sleep(1)
 
         remaining -= 1
+        remaining_catchup_rest_time = remaining
 
     if catchup_rest_skipped:
 
         await remove_keyboard(
             rest_message
-        )
-
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            message_thread_id=THREAD_ID,
-            text="Отдых завершён досрочно."
         )
 
     else:
@@ -1351,10 +1731,6 @@ async def catchup_break(
 
     if day_ended:
         return
-
-    if day_ended:
-        return
-
 
     await asyncio.sleep(1)
 
@@ -1421,10 +1797,10 @@ async def catchup_break(
         message_thread_id=THREAD_ID,
         text=(
             "Вопрос к тебе.\n\n"
-            "Выкладываешься ли ты на полную?\n\n"
-            "Делаешь ли ты всё необходимое для достижения результата?\n\n"
-            "Не тратишь ли время впустую?\n\n"
-            "Проводишь ли ты его с пользой?\n\n"
+            "Выкладываешься ли ты на полную?\n"
+            "Делаешь ли ты всё необходимое для достижения результата?\n"
+            "Не тратишь ли время впустую?\n"
+            "Проводишь ли ты его с пользой?\n"
             "Ответь себе честно: доволен ли ты собой прямо сейчас?\n\n"
             f"Тебе ещё нужно доработать: "
             f"{catchup_time // 60:02}:{catchup_time % 60:02}"
@@ -1441,29 +1817,12 @@ async def catchup_second_half():
     global day_pause
     global catchup_duration
     global break_taken
-
-    remaining = catchup_duration // 2
-
-    while remaining > 0:
-
-        if break_taken:
-            return
-
-        if not await timer_sleep():
-            return
-
-        remaining -= 1
-
-        remaining_catchup_time = remaining
-
-    while day_pause:
-        await asyncio.sleep(1)
-
-    if day_ended:
-        return
-
+    global remaining_catchup_time
     global short_break_used
 
+    current_stage = STAGE_CATCHUP_SECOND_HALF
+
+    break_taken = False
     short_break_used = False
 
     action_message = await bot.send_message(
@@ -1471,24 +1830,19 @@ async def catchup_second_half():
         message_thread_id=THREAD_ID,
         text=(
             "ВПЕРЁЁЁЁД!!!\n\n"
-
             "Остался последний рывок.\n\n"
-
             "Не дай себе потом жалеть о том, что ты мог дожать, но остановился.\n\n"
-
             "Совсем немного усилий сейчас могут сильно повлиять на твоё будущее.\n\n"
-
             "Заканчиваем этот день достойно.\n\n"
-
             f"Длительность этапа: "
             f"{format_minutes(catchup_duration // 2)}."
         ),
         reply_markup=work_keyboard()
     )
 
-    remaining = catchup_duration // 2
+    remaining_catchup_time = catchup_duration // 2
 
-    while remaining > 0:
+    while remaining_catchup_time > 0:
 
         if break_taken:
             return
@@ -1496,17 +1850,14 @@ async def catchup_second_half():
         if not await timer_sleep():
             return
 
-        remaining -= 1
-
-    while day_pause:
-        await asyncio.sleep(1)
-
-    if day_ended:
-        return
+        remaining_catchup_time -= 1
 
     await remove_keyboard(
         action_message
     )
+
+    if day_ended:
+        return
 
     current_stage = STAGE_CATCHUP_FINISH
 
@@ -1527,12 +1878,9 @@ async def main():
         chat_id=CHAT_ID,
         message_thread_id=THREAD_ID,
         text=(
-            "Привет, будущий ML-инженер.\n\n"
-            "Сейчас начинается твой день. Надеюсь, ты хорошо выспался и готов к продуктивной работе.\n\n"
-            "Сегодня тебя ждёт много задач, но помни: каждая минута вложенного времени приближает тебя к той жизни, которую ты хочешь построить для себя и своих близких.\n\n"
-            "Настраивайся на качественную работу, не бойся трудностей и двигайся вперёд. Всё получится."
-        ),
-        reply_markup=start_day_keyboard()
+            "🕵️ Система находится в режиме ожидания.\n\n"
+            "Ждём вашего пробуждения и кодового слова для начала дня."
+        )
     )
 
     await dp.start_polling(bot)

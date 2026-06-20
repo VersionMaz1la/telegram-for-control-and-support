@@ -23,7 +23,7 @@ if TEST_MODE:
 
 else:
 
-    PREP_WARNING = 50 * 60
+    PREP_WARNING = 10 * 60
     PREP_END = 60 * 60
 
     LONG_WORK_BLOCK = 3 * 60 * 60

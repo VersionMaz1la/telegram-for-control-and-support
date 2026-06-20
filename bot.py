@@ -86,6 +86,7 @@ remaining_work_time = 0
 remaining_prep_time = 0
 prep_message = None
 remaining_break_time = 0
+remaining_short_break_time = 0
 remaining_catchup_time = 0
 remaining_catchup_rest_time = 0
 
@@ -111,6 +112,8 @@ catchup_rest_skipped = False
 day_ended = False
 
 day_pause = False
+
+work_timer_id = 0
 
 async def preparation_flow():
 
@@ -138,8 +141,7 @@ async def preparation_flow():
 
         if (
                 not warning_sent
-                and remaining_prep_time <=
-                (PREP_END - PREP_WARNING)
+                and remaining_prep_time <= PREP_WARNING
         ):
             warning_sent = True
 
@@ -151,9 +153,11 @@ async def preparation_flow():
                 text=PREPARATION_WARNING_TEXT,
                 reply_markup=skip_prep_keyboard()
             )
+
     await remove_keyboard(
         prep_message
     )
+
     await start_work_block()
 
 
@@ -161,10 +165,14 @@ async def start_work_block():
     global break_taken
     global short_break_used
     global current_stage
+    global work_timer_id
+    global remaining_work_time
+
+    work_timer_id += 1
+    my_timer_id = work_timer_id
 
     break_taken = False
     short_break_used = False
-
 
     current_stage = STAGE_WORK_FIRST_HALF
 
@@ -202,7 +210,6 @@ async def start_work_block():
             else work_keyboard()
         )
     )
-    global remaining_work_time
 
     remaining = (
         LONG_WORK_BLOCK // 2
@@ -215,6 +222,9 @@ async def start_work_block():
     step = 1  # шаг 1 секунда для теста
 
     while remaining > 0:
+
+        if my_timer_id != work_timer_id:
+            return
 
         if day_ended:
             return
@@ -251,8 +261,13 @@ async def resume_work_block():
     global current_stage
     global short_break_return_stage
     global catchup_duration
+    global work_timer_id
+
+    work_timer_id += 1
+    my_timer_id = work_timer_id
 
     break_taken = False
+    current_stage = short_break_return_stage
 
     if short_break_return_stage == STAGE_CATCHUP:
 
@@ -310,7 +325,16 @@ async def resume_work_block():
 
     while remaining_work_time > 0:
 
+        if my_timer_id != work_timer_id:
+            return
+
+        if break_taken:
+            return
+
         if not await timer_sleep():
+            return
+
+        if break_taken:
             return
 
         remaining_work_time -= 1
@@ -492,8 +516,7 @@ async def start_big_break():
 
         if (
                 not warning_sent
-                and remaining_break_time <=
-                (BREAK_END - BREAK_WARNING)
+                and remaining_break_time <= BREAK_WARNING
         ):
 
             warning_sent = True
@@ -629,6 +652,8 @@ async def confirm_skip_prep(callback: CallbackQuery):
 @dp.callback_query(F.data == "skip_prep")
 async def skip_prep(callback: CallbackQuery):
 
+    await callback.answer()
+
     global prep_skipped
     global day_pause
 
@@ -641,9 +666,9 @@ async def skip_prep(callback: CallbackQuery):
         PREP_SKIP_TEXT
     )
 
-    await start_work_block()
-
-    await callback.answer()
+    asyncio.create_task(
+        start_work_block()
+    )
 
 @dp.callback_query(F.data == "cancel_skip_prep")
 async def cancel_skip_prep(callback: CallbackQuery):
@@ -830,12 +855,16 @@ async def cancel_short_break(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "confirm_short_break")
 async def short_break_handler(callback: CallbackQuery):
+    await callback.answer()
+
     global break_taken
     global current_stage
     global short_break_skipped
     global short_break_used
     global short_break_return_stage
     global day_pause
+    global remaining_short_break_time
+    global work_timer_id
 
     if current_stage not in (
             STAGE_WORK_FIRST_HALF,
@@ -843,54 +872,65 @@ async def short_break_handler(callback: CallbackQuery):
             STAGE_CATCHUP,
             STAGE_CATCHUP_SECOND_HALF
     ):
-        await callback.answer(
-            "Сейчас нельзя взять короткий перерыв.",
-            show_alert=True
-        )
-
         return
 
     short_break_return_stage = current_stage
 
-    if short_break_used:
-        await callback.answer(
-            "Перерыв уже был использован.",
-            show_alert=True
-        )
-
-        day_pause = False
-        return
-
     day_pause = False
-    short_break_used = True
-
     short_break_skipped = False
+
+    work_timer_id += 1
 
     current_stage = STAGE_SHORT_BREAK
     break_taken = True
 
     await delete_message(callback.message)
+
     short_break_message = await callback.message.answer(
         "Начался короткий перерыв на 15 минут.",
         reply_markup=skip_short_break_keyboard()
     )
 
-    await asyncio.sleep(SHORT_BREAK_WARNING_TIME)  # предупреждение за 5 секунд
+    warning_message = None
 
-    if short_break_skipped:
-        return
+    remaining_short_break_time = (
+        SHORT_BREAK_WARNING_TIME + SHORT_BREAK_END_TIME
+    )
+
+    while remaining_short_break_time > SHORT_BREAK_END_TIME:
+
+        if short_break_skipped:
+            return
+
+        await asyncio.sleep(1)
+        remaining_short_break_time -= 1
 
     await remove_keyboard(
         short_break_message
     )
 
-    await callback.message.answer("Короткий перерыв подходит к концу.")
-    await asyncio.sleep(SHORT_BREAK_END_TIME)
+    warning_message = await callback.message.answer(
+        "Короткий перерыв подходит к концу.",
+        reply_markup=skip_short_break_keyboard()
+    )
 
-    if short_break_skipped:
-        return
+    while remaining_short_break_time > 0:
 
-    await callback.message.answer(SHORT_BREAK_END_TEXT, reply_markup=continue_keyboard())
+        if short_break_skipped:
+            return
+
+        await asyncio.sleep(1)
+        remaining_short_break_time -= 1
+
+    if warning_message:
+        await remove_keyboard(
+            warning_message
+        )
+
+    await callback.message.answer(
+        SHORT_BREAK_END_TEXT,
+        reply_markup=continue_keyboard()
+    )
 
 @dp.callback_query(F.data == "skip_short_break")
 async def skip_short_break(callback: CallbackQuery):
@@ -1183,22 +1223,18 @@ async def continue_handler(callback: CallbackQuery):
     global current_block
     global remaining_work_time
 
+    await callback.answer()
+
     await callback.message.edit_reply_markup(reply_markup=None)
 
-    # Если сейчас короткий перерыв, возвращаемся в рабочий блок
     if current_stage == STAGE_SHORT_BREAK:
         await resume_work_block()
-
-        await callback.answer()
         return
 
-    # Если мы в конце второй половины блока — запускаем start_big_break() или вопрос после блока 4
     if current_stage == STAGE_WORK_SECOND_HALF:
         asyncio.create_task(
             second_half_work_block()
         )
-
-        await callback.answer()
         return
 
     if current_stage == STAGE_CATCHUP:
@@ -1207,11 +1243,8 @@ async def continue_handler(callback: CallbackQuery):
         asyncio.create_task(
             catchup_second_half()
         )
-
-        await callback.answer()
         return
 
-    # Если мы в большом перерыве
     if current_stage == STAGE_BIG_BREAK:
 
         current_block += 1
@@ -1240,8 +1273,6 @@ async def continue_handler(callback: CallbackQuery):
             )
 
             current_stage = STAGE_FINISHED
-
-    await callback.answer()
 
 @dp.callback_query(F.data == "day_pause")
 async def day_pause_handler(callback: CallbackQuery):
@@ -1300,9 +1331,10 @@ async def start_big_break_early(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "confirm_big_break")
 async def confirm_big_break(callback: CallbackQuery):
-
     global break_taken
+    global work_timer_id
 
+    work_timer_id += 1
     break_taken = True
 
     await callback.message.edit_reply_markup(
@@ -1365,6 +1397,7 @@ async def remaining_time(callback: CallbackQuery):
     global remaining_prep_time
     global remaining_catchup_time
     global remaining_catchup_rest_time
+    global remaining_short_break_time
 
     if current_stage == STAGE_CATCHUP_REST:
         await callback.answer(
@@ -1400,7 +1433,8 @@ async def remaining_time(callback: CallbackQuery):
 
     if current_stage == STAGE_SHORT_BREAK:
         await callback.answer(
-            "Сейчас идёт короткий перерыв.",
+            f"До конца короткого перерыва осталось:\n"
+            f"{format_minutes(remaining_short_break_time)}",
             show_alert=True
         )
 
@@ -1437,6 +1471,12 @@ async def remaining_time(callback: CallbackQuery):
 @dp.callback_query(F.data == "confirm_skip_short_break")
 async def confirm_skip_short_break(callback: CallbackQuery):
 
+    await callback.answer()
+
+    await callback.message.edit_reply_markup(
+        reply_markup=None
+    )
+
     await callback.message.answer(
         "Ты уверен, что хочешь закончить короткий перерыв раньше?",
         reply_markup=InlineKeyboardMarkup(
@@ -1456,8 +1496,6 @@ async def confirm_skip_short_break(callback: CallbackQuery):
             ]
         )
     )
-
-    await callback.answer()
 
 @dp.callback_query(F.data == "cancel_skip_short_break")
 async def cancel_skip_short_break(callback: CallbackQuery):
